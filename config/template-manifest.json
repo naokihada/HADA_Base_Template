@@ -1,0 +1,58 @@
+{
+  "manifest_version": "1.0.0",
+  "template": {
+    "id": "hada-base-template",
+    "name": "HADA Base Template",
+    "version": "0.1.0"
+  },
+  "compatibility": {
+    "schema_version": "1.0.0",
+    "data_format_version": "1.0.0"
+  },
+  "repositories": {
+    "dev": "HADA_Base_Template_Dev",
+    "public": "HADA_Base_Template",
+    "sample": "HADA_Base_Template_Sample"
+  },
+  "files": {
+    "template_base": "TEMPLATE_BASE.md"
+  },
+  "ownership": {
+    "template_owned": [
+      ".gitattributes",
+      ".gitignore",
+      "AGENTS.md",
+      "README.md",
+      "CHANGELOG.md",
+      "TEMPLATE_BASE.md",
+      "config/template-manifest.json",
+      "config/project.example.json",
+      "tools/**",
+      "tests/**",
+      "docs/**",
+      "AI/README.md",
+      "logs/conversations/README.md"
+    ],
+    "user_owned": [
+      "config/project.json",
+      "WHY.md",
+      "logs/conversations/**",
+      "data/**",
+      "assets/**",
+      "records/**"
+    ],
+    "generated": [
+      "reports/**",
+      "build/**",
+      "output/**"
+    ],
+    "reference": [
+      "references/**",
+      "examples/**"
+    ],
+    "review_required": [
+      "AI/**",
+      "tmp/**"
+    ]
+  }
+}
