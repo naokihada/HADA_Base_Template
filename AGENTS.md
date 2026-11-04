@@ -12,8 +12,10 @@ project owner adopted.
   user-owned, generated, reference, review-required, or unknown files without explicit
   direction.
 - Do not invent missing facts, motivations, approvals, dates, versions, or ownership.
-- Treat `WHY.md` as human-owned intent. Add only reasons the owner stated or adopted;
-  preserve dated history when recording a change of direction.
+- Treat `WHY.md` as human-owned intent. Read it before significant work. When the owner
+  states a durable reason or explicitly adopts one, record it in the applicable WHY
+  file with `python tools/record_why.py --root PROJECT_ROOT`. Add only reasons the owner
+  stated or adopted; preserve dated history when recording a change of direction.
 - Keep secrets, private conversation archives, and real personal records out of public
   templates and samples.
 

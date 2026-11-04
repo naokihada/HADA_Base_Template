@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from tools.upgrade import EXIT_BLOCKED, EXIT_REVIEW_REQUIRED, EXIT_SUCCESS, _tree_files, run
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def make_tree(root: Path, version: str, files: dict[str, str]) -> None:
@@ -16,8 +20,8 @@ def make_tree(root: Path, version: str, files: dict[str, str]) -> None:
     manifest = {
         "template": {"id": "hada-base-template", "version": version},
         "ownership": {
-            "template_owned": ["config/template-manifest.json", "base.txt", "new.txt", "removed.txt", "conflict.txt", "AI/README.md", "logs/conversations/README.md"],
-            "user_owned": ["user.txt", "logs/conversations/**"],
+            "template_owned": ["config/template-manifest.json", "AGENTS.md", "README.md", "tools/**", "base.txt", "new.txt", "removed.txt", "conflict.txt", "AI/README.md", "logs/conversations/README.md"],
+            "user_owned": ["WHY.md", "user.txt", "logs/conversations/**"],
             "generated": [],
             "reference": [],
             "review_required": ["AI/**"],
@@ -128,6 +132,81 @@ class UpgradeTests(unittest.TestCase):
         self.assertIn("tools/upgrade.py", paths)
         self.assertNotIn("tools/__pycache__/upgrade.cpython-313.pyc", paths)
         self.assertFalse(any(".pytest_cache" in path for path in paths))
+
+    def test_update_installs_recorder_and_preserves_existing_user_why(self) -> None:
+        previous_why = "# WHY\n\nTemplate placeholder.\n"
+        current_why = "# WHY\n\n## 2026-01-01 — Existing owner record\n\n> Keep this entry.\n"
+        recorder = (ROOT / "tools" / "record_why.py").read_text(encoding="utf-8")
+        make_tree(self.previous, "0.1.0", {
+            "AGENTS.md": "old guidance\n",
+            "README.md": "old readme\n",
+            "tools/import_conversation.py": "old tool\n",
+            "WHY.md": previous_why,
+        })
+        make_tree(self.current, "0.1.0", {
+            "AGENTS.md": "old guidance\n",
+            "README.md": "old readme\n",
+            "tools/import_conversation.py": "old tool\n",
+            "WHY.md": current_why,
+        })
+        make_tree(self.new, "0.1.1", {
+            "AGENTS.md": "new guidance\n",
+            "README.md": "new readme\n",
+            "tools/import_conversation.py": "old tool\n",
+            "tools/record_why.py": recorder,
+            "WHY.md": "# WHY\n\nNew placeholder wording.\n",
+        })
+
+        code, report, _ = run(self.previous, self.current, self.new, apply=True)
+
+        self.assertEqual(code, EXIT_SUCCESS)
+        self.assertTrue((self.current / "tools" / "record_why.py").is_file())
+        self.assertEqual((self.current / "WHY.md").read_text(encoding="utf-8"), current_why)
+        self.assertIn("tools/record_why.py", report["applied"])
+
+    def test_update_installs_recorder_that_creates_missing_user_why_on_input(self) -> None:
+        recorder = (ROOT / "tools" / "record_why.py").read_text(encoding="utf-8")
+        make_tree(self.previous, "0.1.0", {
+            "AGENTS.md": "old guidance\n",
+            "README.md": "old readme\n",
+            "tools/import_conversation.py": "old tool\n",
+            "WHY.md": "# WHY\n\nOld placeholder.\n",
+        })
+        make_tree(self.current, "0.1.0", {
+            "AGENTS.md": "old guidance\n",
+            "README.md": "old readme\n",
+            "tools/import_conversation.py": "old tool\n",
+        })
+        make_tree(self.new, "0.1.1", {
+            "AGENTS.md": "new guidance\n",
+            "README.md": "new readme\n",
+            "tools/import_conversation.py": "old tool\n",
+            "tools/record_why.py": recorder,
+            "WHY.md": "# WHY\n\nNew placeholder wording.\n",
+        })
+
+        code, report, _ = run(self.previous, self.current, self.new, apply=True)
+
+        self.assertEqual(code, EXIT_SUCCESS)
+        self.assertFalse((self.current / "WHY.md").exists())
+        self.assertTrue((self.current / "tools" / "record_why.py").is_file())
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(self.current / "tools" / "record_why.py"),
+                "--root",
+                str(self.current),
+            ],
+            input="Reason entered by the project owner.\n.\n",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        why_text = (self.current / "WHY.md").read_text(encoding="utf-8")
+        self.assertIn("# WHY", why_text)
+        self.assertIn("> Reason entered by the project owner.", why_text)
+        self.assertIn("tools/record_why.py", report["applied"])
 
     def test_nested_roots_are_blocked(self) -> None:
         nested = self.current / "nested"

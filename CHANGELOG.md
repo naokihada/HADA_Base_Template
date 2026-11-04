@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.1] - 2026-11-04
+
+### Added
+
+- Explicit WHY lifecycle rules and an append-only recorder for user-stated or adopted
+  reasons.
+- Simulated user-input tests for multiline and missing, empty, whitespace-only, and
+  existing WHY files, plus safe updater delivery.
+
 ## [0.1.0] - 2026-11-02
 
 ### Added
