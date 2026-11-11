@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hada.invalid/schemas/base-family.schema.json",
+  "title": "HADA Base family inventory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "family_id", "inventory_revision", "inventory_complete", "members"],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "family_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+    "inventory_revision": { "type": "integer", "minimum": 1 },
+    "inventory_complete": { "type": "boolean" },
+    "members": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/member" },
+      "uniqueItems": true
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "inventory_complete": { "const": true } },
+        "required": ["inventory_complete"]
+      },
+      "then": {
+        "properties": {
+          "members": {
+            "contains": {
+              "type": "object",
+              "properties": { "kind": { "const": "specialized_template" } },
+              "required": ["kind"]
+            },
+            "minContains": 1
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["template_id", "minimum_version", "tested_version"],
+      "properties": {
+        "template_id": { "const": "hada-base-template" },
+        "minimum_version": { "$ref": "#/$defs/version" },
+        "tested_version": { "$ref": "#/$defs/version" }
+      }
+    },
+    "member": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "locator", "adoption_state"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+        "kind": { "enum": ["specialized_template", "data_project"] },
+        "locator": { "type": "string", "minLength": 1 },
+        "adoption_state": {
+          "enum": ["not_adopted", "migrating", "compliant", "blocked"]
+        },
+        "base_compatibility": { "$ref": "#/$defs/compatibility" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "adoption_state": { "const": "compliant" } } },
+          "then": { "required": ["base_compatibility"] }
+        }
+      ]
+    }
+  }
+}

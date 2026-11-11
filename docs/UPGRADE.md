@@ -15,25 +15,53 @@ previous template. New files can be added when the destination is absent. User-o
 unknown, locally modified, removed, or colliding files are preserved and reported for
 review. No file is deleted automatically.
 
-The initial updater accepts local directories and does not download releases, invoke
-Git, or update specialized templates. A specialized template's own ID, version, and
-updater remain authoritative. Integrating Base compatibility metadata does not grant
-the Base updater permission to rewrite that template's version.
+The initial updater accepts three distinct local directories, rejects symbolic-link
+roots, and does not download releases, invoke Git, or update specialized templates. A
+specialized template's own ID, version, and updater remain authoritative. Integrating
+Base compatibility metadata does not grant the Base updater permission to rewrite that
+template's version.
 
-A child that chooses this contract can store compatibility metadata separately in its
-own canonical manifest:
+A specialized template that adopts Base must store compatibility metadata separately
+from its own identity and version. Keep `base-family.json` in that template and register
+the template and every derived project:
 
 ```json
 "base_compatibility": {
   "template_id": "hada-base-template",
-  "minimum_version": "0.1.0",
-  "tested_version": "0.1.0"
+  "minimum_version": "0.2.0",
+  "tested_version": "0.2.0"
 }
 ```
 
 `minimum_version` is the minimum supported Base contract; `tested_version` is the
 latest Base version the child maintainer verified. Neither value replaces the child's
-own template version.
+own template version. Once a family member claims `compliant`, this declaration is
+required.
+
+Before adopting Base into an existing specialized template, complete the YAML migration
+for the template and every existing data project derived from it. Maintain a complete
+`base-family.json` inventory, then run the exact-membership family gate against every
+registered root before considering adoption complete; see [YAML migration](YAML_MIGRATION.md).
+An unavailable or unlisted descendant keeps adoption incomplete.
+The direct-Base three-tree updater also inventories P, C, and N. If any tree contains
+YAML, it reports `REVIEW_REQUIRED`; `--apply` is blocked without applying any files.
+The updater never converts or deletes YAML.
+
+Direct Base consumers use `artifact_role: "base_consumer"`. The updater preserves that
+role when it updates the rest of the template manifest. It refuses Dev, public-template,
+or Sample artifacts in the current-project position.
+
+Before promoting a Base artifact, run:
+
+```text
+python tools/validate.py --release
+```
+
+This non-YAML release check validates schemas, version mirrors, role boundaries, local
+README links, the public WHY placeholder, prohibited YAML, and YAML parser/serializer
+references. HADA repositories do not store YAML workflow files. An external CI service
+may call this command; promotion is considered automated only when that service
+requires the check.
 
 Reports are written under `records/template-upgrades/`. They contain file paths and
 hashes needed to explain the plan, not file contents. Exit statuses:

@@ -1,0 +1,11 @@
+project_name = "Replace with your project name"
+
+[template]
+id = "hada-base-template"
+version = "0.2.0"
+
+[features]
+conversation_logging = false
+
+[compatibility]
+data_format_version = "1.2.0"

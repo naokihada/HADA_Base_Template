@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hada.invalid/schemas/project-config.schema.json",
+  "title": "HADA Base project configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["features"],
+  "properties": {
+    "project_name": { "type": "string", "minLength": 1 },
+    "template": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "version": { "$ref": "#/$defs/version" }
+      }
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conversation_logging"],
+      "properties": {
+        "conversation_logging": { "type": "boolean" }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["data_format_version"],
+      "properties": {
+        "data_format_version": { "$ref": "#/$defs/version" }
+      }
+    }
+  },
+  "$defs": {
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    }
+  }
+}

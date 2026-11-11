@@ -87,6 +87,9 @@ def read_interactive_reason() -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if sys.version_info < (3, 12):
+        print(f"HADA Base tools require Python 3.12 or later; current runtime is {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}", file=sys.stderr)
+        return 1
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--root",

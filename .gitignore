@@ -5,5 +5,7 @@ __pycache__/
 venv/
 env/
 .env
+config/project.json
+config/project.toml
 logs/conversations/**
 !logs/conversations/README.md

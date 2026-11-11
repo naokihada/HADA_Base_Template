@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tools.upgrade import EXIT_BLOCKED, EXIT_REVIEW_REQUIRED, EXIT_SUCCESS, _tree_files, run
 
@@ -18,7 +19,12 @@ def make_tree(root: Path, version: str, files: dict[str, str]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
     manifest = {
-        "template": {"id": "hada-base-template", "version": version},
+        "manifest_version": "1.1.0",
+        "artifact_role": "base_consumer" if root.name == "current" else "base_public",
+        "template": {"id": "hada-base-template", "name": "HADA Base Template", "version": version},
+        "compatibility": {"schema_version": "1.0.0", "data_format_version": "1.2.0"},
+        "repositories": {"dev": "dev", "public": "public", "sample": "sample"},
+        "files": {"template_base": "TEMPLATE_BASE.md"},
         "ownership": {
             "template_owned": ["config/template-manifest.json", "AGENTS.md", "README.md", "tools/**", "base.txt", "new.txt", "removed.txt", "conflict.txt", "AI/README.md", "logs/conversations/README.md"],
             "user_owned": ["WHY.md", "user.txt", "logs/conversations/**"],
@@ -71,6 +77,40 @@ class UpgradeTests(unittest.TestCase):
         self.assertEqual((self.current / "conflict.txt").read_text(encoding="utf-8"), "local\n")
         self.assertEqual((self.current / "user.txt").read_text(encoding="utf-8"), "private\n")
         self.assertEqual(report["applied"], ["base.txt", "config/template-manifest.json", "new.txt"])
+        installed_manifest = json.loads((self.current / "config/template-manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(installed_manifest["artifact_role"], "base_consumer")
+        self.assertEqual(installed_manifest["template"]["version"], "0.2.0")
+
+    def test_legacy_consumer_manifest_is_migrated_without_losing_consumer_role(self) -> None:
+        make_tree(self.previous, "0.1.0", {"base.txt": "old\n"})
+        make_tree(self.current, "0.1.0", {"base.txt": "old\n"})
+        make_tree(self.new, "0.2.0", {"base.txt": "new\n"})
+        for root in (self.previous, self.current):
+            manifest_path = root / "config/template-manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["manifest_version"] = "1.0.0"
+            manifest.pop("artifact_role")
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        code, report, _ = run(self.previous, self.current, self.new, apply=True)
+
+        self.assertEqual(code, EXIT_SUCCESS, report)
+        installed = json.loads((self.current / "config/template-manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(installed["manifest_version"], "1.1.0")
+        self.assertEqual(installed["artifact_role"], "base_consumer")
+
+    def test_base_template_role_is_rejected_as_update_target(self) -> None:
+        self.fixture()
+        path = self.current / "config/template-manifest.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest["artifact_role"] = "base_sample"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        code, report, report_path = run(self.previous, self.current, self.new)
+
+        self.assertEqual(code, EXIT_BLOCKED)
+        self.assertEqual(report["status"], "BLOCKED")
+        self.assertIsNone(report_path)
 
     def test_specialized_template_is_blocked(self) -> None:
         make_tree(self.previous, "0.1.0", {})
@@ -92,6 +132,38 @@ class UpgradeTests(unittest.TestCase):
         self.assertEqual(report["status"], "BLOCKED")
         self.assertIsNone(report_path)
         self.assertEqual((self.current / "base.txt").read_text(encoding="utf-8"), "current\n")
+
+    def test_yaml_in_any_tree_blocks_apply_until_migration_is_complete(self) -> None:
+        make_tree(self.previous, "0.1.0", {"base.txt": "old\n"})
+        make_tree(self.current, "0.1.0", {"base.txt": "old\n"})
+        make_tree(self.new, "0.2.0", {"base.txt": "new\n", "new.txt": "added\n"})
+        yaml_sources = (
+            (self.previous, "references/old.yaml"),
+            (self.current, "data/current.yml"),
+            (self.new, "config/legacy.YAML"),
+        )
+        for root, relative in yaml_sources:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("value: 1\n", encoding="utf-8")
+
+        plan_code, plan, _ = run(self.previous, self.current, self.new)
+        apply_code, applied_report, report_path = run(
+            self.previous, self.current, self.new, apply=True
+        )
+
+        self.assertEqual(plan_code, EXIT_REVIEW_REQUIRED)
+        self.assertEqual(
+            [(item["tree"], item["path"]) for item in plan["yaml_migration_required"]],
+            [("P", "references/old.yaml"), ("C", "data/current.yml"), ("N", "config/legacy.YAML")],
+        )
+        self.assertEqual(apply_code, EXIT_BLOCKED)
+        self.assertEqual(applied_report["status"], "BLOCKED")
+        self.assertEqual(applied_report["applied"], [])
+        self.assertTrue(report_path and report_path.is_file())
+        self.assertEqual((self.current / "base.txt").read_text(encoding="utf-8"), "old\n")
+        self.assertFalse((self.current / "new.txt").exists())
+        self.assertTrue(all((root / relative).is_file() for root, relative in yaml_sources))
 
     def test_specific_template_paths_override_broad_protection_and_unknown_current_paths_are_reported(self) -> None:
         make_tree(self.previous, "0.1.0", {
@@ -214,6 +286,20 @@ class UpgradeTests(unittest.TestCase):
         code, report, report_path = run(self.previous, self.current, nested)
         self.assertEqual(code, EXIT_BLOCKED)
         self.assertEqual(report["status"], "BLOCKED")
+        self.assertIsNone(report_path)
+
+    def test_symbolic_link_root_is_blocked_before_resolution(self) -> None:
+        with patch.object(
+            Path,
+            "is_symlink",
+            autospec=True,
+            side_effect=lambda candidate: candidate == self.previous,
+        ):
+            code, report, report_path = run(self.previous, self.current, self.new)
+
+        self.assertEqual(code, EXIT_BLOCKED)
+        self.assertEqual(report["status"], "BLOCKED")
+        self.assertIn("must not be symbolic links", report["error"])
         self.assertIsNone(report_path)
 
 

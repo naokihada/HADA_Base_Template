@@ -14,6 +14,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # The supported runtime is Python 3.12+.
+    tomllib = None  # type: ignore[assignment]
+
+if __package__:
+    from .validate import load_json_document, validate_project_config
+else:  # Support `python tools/import_conversation.py` as well as module imports.
+    from validate import load_json_document, validate_project_config
+
 EXIT_SUCCESS = 0
 EXIT_BLOCKED = 2
 EXIT_FAILED = 3
@@ -34,20 +44,56 @@ def _inside(path: Path, root: Path) -> bool:
 
 
 def _logging_enabled(root: Path) -> bool:
-    config_path = root / "config" / "project.json"
-    if config_path.is_symlink():
+    config_dir = root / "config"
+    toml_path = config_dir / "project.toml"
+    legacy_json_path = config_dir / "project.json"
+    if toml_path.is_symlink():
+        raise BlockedError("config/project.toml must not be a symbolic link")
+    if legacy_json_path.is_symlink():
         raise BlockedError("config/project.json must not be a symbolic link")
-    if not config_path.is_file():
+    for path in (toml_path, legacy_json_path):
+        if path.exists() and not path.is_file():
+            raise BlockedError(f"{path.relative_to(root)} must be a regular file")
+
+    has_toml = toml_path.is_file()
+    has_legacy_json = legacy_json_path.is_file()
+    if has_toml and has_legacy_json:
+        raise BlockedError(
+            "both config/project.toml and legacy config/project.json exist; "
+            "keep one owner-validated configuration"
+        )
+    if not has_toml and not has_legacy_json:
         return False
-    try:
-        config: Any = json.loads(config_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise BlockedError("config/project.json is unreadable or invalid JSON") from exc
+
+    if has_toml:
+        if tomllib is None:
+            raise BlockedError(
+                "HADA Base tools require Python 3.12 or later"
+            )
+        try:
+            config: Any = tomllib.loads(toml_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError) as exc:
+            raise BlockedError("config/project.toml is unreadable") from exc
+        except tomllib.TOMLDecodeError as exc:
+            raise BlockedError("config/project.toml is invalid TOML") from exc
+        config_name = "config/project.toml"
+        table_name = "table"
+    else:
+        try:
+            config = load_json_document(legacy_json_path)
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+            raise BlockedError("legacy config/project.json is unreadable or invalid JSON") from exc
+        config_name = "legacy config/project.json"
+        table_name = "JSON object"
+
     if not isinstance(config, dict):
-        raise BlockedError("config/project.json must contain a JSON object")
+        raise BlockedError(f"{config_name} must contain a {table_name}")
+    schema_errors = validate_project_config(config)
+    if schema_errors:
+        raise BlockedError(f"{config_name} does not match the project configuration schema: {schema_errors[0]}")
     features = config.get("features", {})
     if not isinstance(features, dict):
-        raise BlockedError("config.features must be a JSON object")
+        raise BlockedError("config.features must be a TOML table or JSON object")
     enabled = features.get("conversation_logging", False)
     if not isinstance(enabled, bool):
         raise BlockedError("features.conversation_logging must be true or false")
@@ -92,7 +138,10 @@ def import_file(source: Path, root: Path) -> tuple[int, dict[str, Any]]:
             raise BlockedError("source must be a regular file")
         extension = source.suffix.lower()
         if extension not in SUPPORTED_EXTENSIONS:
-            raise BlockedError("supported source formats are .md, .txt, .json, and .jsonl")
+            raise BlockedError(
+                "supported source formats are .md, .txt, .json, and .jsonl; "
+                "convert external YAML to an approved format before import"
+            )
 
         archive = root / "logs" / "conversations"
         for path in (root / "logs", archive):
@@ -146,6 +195,9 @@ def import_file(source: Path, root: Path) -> tuple[int, dict[str, Any]]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    if sys.version_info < (3, 12):
+        print(f"FAIL: HADA Base tools require Python 3.12 or later; current runtime is {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
+        return 1
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--source", type=Path, required=True, help="exported .md, .txt, .json, or .jsonl file")

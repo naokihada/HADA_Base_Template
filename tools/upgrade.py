@@ -14,6 +14,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+if __package__:
+    from .validate import (
+        DuplicateJSONKeyError,
+        find_yaml_files,
+        load_json_document,
+        validate_manifest_document,
+    )
+else:  # Support `python tools/upgrade.py` as well as module imports.
+    from validate import (
+        DuplicateJSONKeyError,
+        find_yaml_files,
+        load_json_document,
+        validate_manifest_document,
+    )
+
 EXIT_SUCCESS = 0
 EXIT_REVIEW_REQUIRED = 1
 EXIT_BLOCKED = 2
@@ -28,14 +43,28 @@ class BlockedError(Exception):
     """The request is invalid or unsafe to apply."""
 
 
-def _read_manifest(root: Path) -> dict[str, Any]:
+def _read_manifest(root: Path, tree_role: str) -> dict[str, Any]:
     path = root / "config" / "template-manifest.json"
+    if path.is_symlink():
+        raise BlockedError("template manifest must not be a symbolic link")
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        value = load_json_document(path)
+    except (OSError, UnicodeError, json.JSONDecodeError, DuplicateJSONKeyError) as exc:
         raise BlockedError(f"missing or invalid manifest: {path.name}") from exc
     if not isinstance(value, dict):
         raise BlockedError("manifest root must be an object")
+    schema_errors = validate_manifest_document(value)
+    if schema_errors:
+        raise BlockedError(f"manifest does not match its declared schema: {schema_errors[0]}")
+    manifest_version = value.get("manifest_version")
+    role = value.get("artifact_role")
+    if role is None and manifest_version == "1.0.0":
+        role = "base_consumer" if tree_role == "current" else "base_public"
+    expected_role = "base_consumer" if tree_role == "current" else "base_public"
+    if role != expected_role:
+        raise BlockedError(f"{tree_role} tree manifest must have artifact_role {expected_role}")
+    if tree_role == "new" and manifest_version != "1.1.0":
+        raise BlockedError("new Base manifest must use manifest_version 1.1.0")
     template = value.get("template")
     if not isinstance(template, dict):
         raise BlockedError("manifest template must be an object")
@@ -54,6 +83,19 @@ def _read_manifest(root: Path) -> dict[str, Any]:
     return value
 
 
+def _comparison_digest(path: Path, relative: str) -> str | None:
+    """Compare manifest content independent of its per-project artifact role."""
+    raw_hash = _digest(path)
+    if raw_hash is None or relative != "config/template-manifest.json":
+        return raw_hash
+    value = load_json_document(path)
+    if not isinstance(value, dict):
+        return raw_hash
+    value.pop("artifact_role", None)
+    normalized = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
 def _valid_version(value: Any) -> bool:
     if not isinstance(value, str) or not value:
         return False
@@ -62,7 +104,10 @@ def _valid_version(value: Any) -> bool:
 
 
 def _contained_roots(previous: Path, current: Path, new: Path) -> tuple[Path, Path, Path]:
-    roots = tuple(path.expanduser().resolve(strict=True) for path in (previous, current, new))
+    requested_roots = tuple(path.expanduser() for path in (previous, current, new))
+    if any(path.is_symlink() for path in requested_roots):
+        raise BlockedError("previous, current, and new roots must not be symbolic links")
+    roots = tuple(path.resolve(strict=True) for path in requested_roots)
     if any(not path.is_dir() for path in roots):
         raise BlockedError("previous, current, and new roots must be directories")
     if len(set(roots)) != 3:
@@ -153,9 +198,9 @@ def _safe_current_path(root: Path, relative: str, *, create_parents: bool = Fals
 
 def build_plan(previous: Path, current: Path, new: Path) -> dict[str, Any]:
     previous, current, new = _contained_roots(previous, current, new)
-    previous_manifest = _read_manifest(previous)
-    current_manifest = _read_manifest(current)
-    new_manifest = _read_manifest(new)
+    previous_manifest = _read_manifest(previous, "previous")
+    current_manifest = _read_manifest(current, "current")
+    new_manifest = _read_manifest(new, "new")
     old_version = tuple(int(part) for part in previous_manifest["template"]["version"].split("."))
     next_version = tuple(int(part) for part in new_manifest["template"]["version"].split("."))
     if next_version <= old_version:
@@ -169,7 +214,17 @@ def build_plan(previous: Path, current: Path, new: Path) -> dict[str, Any]:
         raise BlockedError("new Base version is older than the current project's installed Base version")
     paths = _tree_files(previous) | _tree_files(current) | _tree_files(new)
     items: list[dict[str, Any]] = []
-    has_review = False
+    yaml_migration_required: list[dict[str, str]] = []
+    for tree_name, root in (("P", previous), ("C", current), ("N", new)):
+        try:
+            yaml_paths = find_yaml_files(root)
+        except OSError as exc:
+            raise BlockedError(f"could not scan {tree_name} tree for YAML files: {exc}") from exc
+        yaml_migration_required.extend(
+            {"tree": tree_name, "path": path.relative_to(root).as_posix()}
+            for path in yaml_paths
+        )
+    has_review = bool(yaml_migration_required)
 
     for relative in sorted(paths):
         owner = _ownership(relative, manifests)
@@ -187,38 +242,40 @@ def build_plan(previous: Path, current: Path, new: Path) -> dict[str, Any]:
         old_path = previous / relative
         current_path = _safe_current_path(current, relative)
         new_path = new / relative
-        old_hash = _digest(old_path)
-        current_hash = _digest(current_path)
-        new_hash = _digest(new_path)
+        old_hash = _comparison_digest(old_path, relative)
+        current_hash = _comparison_digest(current_path, relative)
+        new_hash = _comparison_digest(new_path, relative)
+        current_raw_hash = _digest(current_path)
+        new_raw_hash = _digest(new_path)
 
         if old_hash is None and new_hash is None:
             continue
         if old_hash is None and new_hash is not None:
             if current_hash is None:
-                items.append({"path": relative, "classification": "template_only", "action": "add", "before": None, "new": new_hash})
+                items.append({"path": relative, "classification": "template_only", "action": "add", "before": None, "new": new_raw_hash})
             else:
                 has_review = True
-                items.append({"path": relative, "classification": "path_collision", "action": "review", "current": current_hash, "new": new_hash})
+                items.append({"path": relative, "classification": "path_collision", "action": "review", "current": current_raw_hash, "new": new_raw_hash})
             continue
         if old_hash is not None and new_hash is None:
             has_review = True
-            items.append({"path": relative, "classification": "template_removed", "action": "review_preserve", "previous": old_hash, "current": current_hash})
+            items.append({"path": relative, "classification": "template_removed", "action": "review_preserve", "previous": old_hash, "current": current_raw_hash})
             continue
         if current_hash is None:
             has_review = True
-            items.append({"path": relative, "classification": "current_missing", "action": "review_preserve", "previous": old_hash, "new": new_hash})
+            items.append({"path": relative, "classification": "current_missing", "action": "review_preserve", "previous": old_hash, "new": new_raw_hash})
         elif current_hash == new_hash:
-            items.append({"path": relative, "classification": "already_current", "action": "none", "current": current_hash})
+            items.append({"path": relative, "classification": "already_current", "action": "none", "current": current_raw_hash})
         elif current_hash == old_hash:
             if new_hash == old_hash:
-                items.append({"path": relative, "classification": "unchanged", "action": "none", "current": current_hash})
+                items.append({"path": relative, "classification": "unchanged", "action": "none", "current": current_raw_hash})
             else:
-                items.append({"path": relative, "classification": "template_only", "action": "update", "before": current_hash, "new": new_hash})
+                items.append({"path": relative, "classification": "template_only", "action": "update", "before": current_raw_hash, "new": new_raw_hash})
         elif new_hash == old_hash:
-            items.append({"path": relative, "classification": "user_only", "action": "preserve", "current": current_hash})
+            items.append({"path": relative, "classification": "user_only", "action": "preserve", "current": current_raw_hash})
         else:
             has_review = True
-            items.append({"path": relative, "classification": "conflict", "action": "review_preserve", "previous": old_hash, "current": current_hash, "new": new_hash})
+            items.append({"path": relative, "classification": "conflict", "action": "review_preserve", "previous": old_hash, "current": current_raw_hash, "new": new_raw_hash})
 
     return {
         "status": "REVIEW_REQUIRED" if has_review else "SUCCESS",
@@ -227,6 +284,7 @@ def build_plan(previous: Path, current: Path, new: Path) -> dict[str, Any]:
         "new_version": new_version,
         "items": items,
         "actions": [item for item in items if item["action"] in ("add", "update")],
+        "yaml_migration_required": yaml_migration_required,
     }
 
 
@@ -242,9 +300,27 @@ def _apply_actions(current: Path, new: Path, actions: list[dict[str, Any]], appl
         if _digest(target) != item.get("before"):
             raise BlockedError(f"current project changed after planning: {relative}")
         target.parent.mkdir(parents=True, exist_ok=True)
+        data = source.read_bytes()
+        if relative == "config/template-manifest.json":
+            try:
+                source_manifest = load_json_document(source)
+                current_manifest = load_json_document(target) if target.is_file() else {}
+            except (OSError, UnicodeError, json.JSONDecodeError, DuplicateJSONKeyError) as exc:
+                raise BlockedError(f"cannot preserve current consumer role in manifest: {exc}") from exc
+            if not isinstance(source_manifest, dict) or not isinstance(current_manifest, dict):
+                raise BlockedError("manifest update requires JSON object roots")
+            current_role = current_manifest.get("artifact_role")
+            if current_role is None and current_manifest.get("manifest_version") == "1.0.0":
+                current_role = "base_consumer"
+            if current_role != "base_consumer":
+                raise BlockedError("manifest update target is not a direct Base consumer")
+            if source_manifest.get("artifact_role") != "base_public":
+                raise BlockedError("new Base manifest must retain the base_public template role")
+            source_manifest["artifact_role"] = current_role
+            data = (json.dumps(source_manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
         with tempfile.NamedTemporaryFile(dir=target.parent, prefix=".hada-base-", delete=False) as stream:
             temp_path = Path(stream.name)
-            stream.write(source.read_bytes())
+            stream.write(data)
         try:
             os.replace(temp_path, target)
         finally:
@@ -267,6 +343,16 @@ def run(previous: Path, current: Path, new: Path, apply: bool = False) -> tuple[
         previous_root, current_root, new_root = _contained_roots(previous, current, new)
         plan = build_plan(previous_root, current_root, new_root)
         applied: list[str] = []
+        if apply and plan.get("yaml_migration_required"):
+            plan["status"] = "BLOCKED"
+            plan["error"] = (
+                "YAML migration must be completed and validated in P, C, and N "
+                "before applying Base updates"
+            )
+            plan["mode"] = "apply"
+            plan["applied"] = applied
+            report_path = _write_report(current_root, plan)
+            return EXIT_BLOCKED, plan, report_path
         if apply and plan["actions"]:
             try:
                 _apply_actions(current_root, new_root, plan["actions"], applied)
@@ -295,6 +381,9 @@ def run(previous: Path, current: Path, new: Path, apply: bool = False) -> tuple[
 
 
 def main(argv: list[str] | None = None) -> int:
+    if sys.version_info < (3, 12):
+        print(f"FAIL: HADA Base tools require Python 3.12 or later; current runtime is {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")
+        return 1
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--previous", type=Path, required=True, help="previous Base template root")
     parser.add_argument("--current", type=Path, required=True, help="current project root")
@@ -302,7 +391,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--apply", action="store_true", help="apply only safe template-owned additions and updates")
     args = parser.parse_args(argv)
     code, report, report_path = run(args.previous, args.current, args.new, args.apply)
-    print(f"{report['status']}: {len(report.get('actions', []))} safe action(s)")
+    if args.apply:
+        print(f"{report['status']}: {len(report.get('applied', []))} action(s) applied")
+    else:
+        print(f"{report['status']}: {len(report.get('actions', []))} safe action(s) available")
     if report_path is not None:
         print(f"Report: {report_path}")
     if report.get("error"):
@@ -310,6 +402,8 @@ def main(argv: list[str] | None = None) -> int:
     for item in report.get("items", []):
         if item["action"] in ("add", "update", "review", "review_preserve"):
             print(f"{item['action']}: {item['path']} ({item['classification']})")
+    for item in report.get("yaml_migration_required", []):
+        print(f"yaml_migration_required: {item['tree']}/{item['path']}")
     return code
 
 

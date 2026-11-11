@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hada.invalid/schemas/template-manifest-1.1.0.schema.json",
+  "title": "HADA Base template manifest 1.1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifest_version",
+    "artifact_role",
+    "template",
+    "compatibility",
+    "repositories",
+    "files",
+    "ownership"
+  ],
+  "properties": {
+    "manifest_version": { "const": "1.1.0" },
+    "artifact_role": {
+      "enum": ["base_dev", "base_public", "base_sample", "base_consumer"]
+    },
+    "template": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "version"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "$ref": "#/$defs/version" }
+      }
+    },
+    "compatibility": { "$ref": "#/$defs/compatibility" },
+    "repositories": { "$ref": "#/$defs/repositories" },
+    "files": { "$ref": "#/$defs/files" },
+    "ownership": { "$ref": "#/$defs/ownership_object" }
+  },
+  "$defs": {
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "data_format_version"],
+      "properties": {
+        "schema_version": { "$ref": "#/$defs/version" },
+        "data_format_version": { "$ref": "#/$defs/version" }
+      }
+    },
+    "repositories": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dev", "public", "sample"],
+      "properties": {
+        "dev": { "type": "string", "minLength": 1 },
+        "public": { "type": "string", "minLength": 1 },
+        "sample": { "type": "string", "minLength": 1 }
+      }
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["template_base"],
+      "properties": {
+        "template_base": { "const": "TEMPLATE_BASE.md" }
+      }
+    },
+    "ownership_object": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["template_owned", "user_owned", "generated", "reference", "review_required"],
+      "properties": {
+        "template_owned": { "$ref": "#/$defs/path_patterns" },
+        "user_owned": { "$ref": "#/$defs/path_patterns" },
+        "generated": { "$ref": "#/$defs/path_patterns" },
+        "reference": { "$ref": "#/$defs/path_patterns" },
+        "review_required": { "$ref": "#/$defs/path_patterns" }
+      }
+    },
+    "path_patterns": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    }
+  }
+}

@@ -5,9 +5,13 @@ or automatically retrieve chats from an AI service.
 
 ## Enable manual imports
 
-1. Copy `config/project.example.json` to `config/project.json` if the project has no
+1. Copy `config/project.example.toml` to `config/project.toml` if the project has no
    local project configuration yet.
-2. Set `features.conversation_logging` to `true` in `config/project.json`.
+2. Set `features.conversation_logging` to `true` in `config/project.toml`.
+   Existing user-owned `config/project.json` files are read-only compatibility inputs.
+   Do not keep both files; if both exist, the importer blocks until the owner resolves
+   the conflict. Base requires Python 3.12 or later; install `requirements.txt` for
+   the Base validator's JSON Schema dependency.
 3. Export a conversation from the AI service, then import the exported file:
 
    ```text
@@ -15,7 +19,8 @@ or automatically retrieve chats from an AI service.
    ```
 
    Supported file types are Markdown (`.md`), text (`.txt`), JSON (`.json`), and JSON
-   Lines (`.jsonl`). The importer copies the file bytes unchanged to
+   Lines (`.jsonl`). YAML (`.yaml`, `.yml`) is rejected; convert external YAML to an
+   approved supported format before import. The importer copies the file bytes unchanged to
    `logs/conversations/`, records its SHA-256 in the filename, and does not modify the
    source. Reimporting content with the same hash reports `ALREADY_PRESENT` and creates
    no second copy.

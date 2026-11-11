@@ -1,13 +1,14 @@
 {
-  "manifest_version": "1.0.0",
+  "manifest_version": "1.1.0",
+  "artifact_role": "base_public",
   "template": {
     "id": "hada-base-template",
     "name": "HADA Base Template",
-    "version": "0.1.1"
+    "version": "0.2.0"
   },
   "compatibility": {
     "schema_version": "1.0.0",
-    "data_format_version": "1.0.0"
+    "data_format_version": "1.2.0"
   },
   "repositories": {
     "dev": "HADA_Base_Template_Dev",
@@ -26,7 +27,10 @@
       "CHANGELOG.md",
       "TEMPLATE_BASE.md",
       "config/template-manifest.json",
-      "config/project.example.json",
+      "config/schemas/**",
+      "config/base-family.example.json",
+      "config/project.example.toml",
+      "requirements.txt",
       "tools/**",
       "tests/**",
       "docs/**",
@@ -35,6 +39,8 @@
     ],
     "user_owned": [
       "config/project.json",
+      "config/project.toml",
+      "config/base-family.json",
       "WHY.md",
       "logs/conversations/**",
       "data/**",
